@@ -29,12 +29,12 @@ def fetch_all_data(tickers):
     print(f"📥 Fetching {len(tickers)} tickers...")
     raw = yf.download(
         tickers,
-        period="60d",
+        period="30d",
         interval="1d",
-        group_by="ticker",
         auto_adjust=True,
         progress=False,
         threads=True,
+        multi_level_index=True,
     )
     return raw
 
@@ -43,10 +43,17 @@ def extract_ticker_data(raw, tickers):
     result = {}
     for ticker in tickers:
         try:
-            if len(tickers) == 1:
-                df = raw.copy()
+            # yfinance 1.x returns MultiIndex (ticker, field)
+            if isinstance(raw.columns, type(raw.columns)) and hasattr(raw.columns, "levels"):
+                # MultiIndex: swap to (field, ticker) then access ticker
+                df = raw.xs(ticker, axis=1, level=0) if ticker in raw.columns.get_level_values(0) else None
+                if df is None:
+                    df = raw.xs(ticker, axis=1, level=1) if ticker in raw.columns.get_level_values(1) else None
             else:
-                df = raw[ticker].copy()
+                df = raw[ticker].copy() if ticker in raw.columns else None
+            if df is None:
+                continue
+            df = df.copy()
             df = df.dropna(subset=["Close"])
             if len(df) >= 10:
                 result[ticker] = df
@@ -77,7 +84,7 @@ def get_global_data():
         "USD/IDR":    "IDR=X",
         "Emas":       "GC=F",
         "Crude Oil":  "CL=F",
-        "Nikel":      "NI=F",
+        "Nikel":      "NTR.TO",  # Nickel ETF as proxy
         "US10Y":      "^TNX",
     }
     result = {}
@@ -366,15 +373,24 @@ def build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_df)
 
     # 7. Sinyal Teknikal
     lines.append("*⚡ Sinyal Teknikal*")
-    oversold  = tech_df[tech_df["rsi"] < 30]["ticker"].tolist()
-    overbought = tech_df[tech_df["rsi"] > 70]["ticker"].tolist()
-    golden    = tech_df[tech_df["golden_cross"] == True]["ticker"].tolist()
-    death     = tech_df[tech_df["death_cross"] == True]["ticker"].tolist()
-    macd_b    = tech_df[tech_df["macd_bull"] == True]["ticker"].tolist()
-    macd_br   = tech_df[tech_df["macd_bear"] == True]["ticker"].tolist()
-    breakouts = tech_df[tech_df["breakout"] == True]["ticker"].tolist()
-    breakdowns = tech_df[tech_df["breakdown"] == True]["ticker"].tolist()
-    squeezes  = tech_df[tech_df["bb_squeeze"] == True]["ticker"].tolist()
+
+    def safe_filter(df, col, condition_fn):
+        if col not in df.columns or df.empty:
+            return []
+        try:
+            return df[condition_fn(df[col])]["ticker"].tolist()
+        except Exception:
+            return []
+
+    oversold   = safe_filter(tech_df, "rsi", lambda x: x < 30)
+    overbought = safe_filter(tech_df, "rsi", lambda x: x > 70)
+    golden     = safe_filter(tech_df, "golden_cross", lambda x: x == True)
+    death      = safe_filter(tech_df, "death_cross", lambda x: x == True)
+    macd_b     = safe_filter(tech_df, "macd_bull", lambda x: x == True)
+    macd_br    = safe_filter(tech_df, "macd_bear", lambda x: x == True)
+    breakouts  = safe_filter(tech_df, "breakout", lambda x: x == True)
+    breakdowns = safe_filter(tech_df, "breakdown", lambda x: x == True)
+    squeezes   = safe_filter(tech_df, "bb_squeeze", lambda x: x == True)
 
     def fmt_list(lst): return ", ".join([f"`{t}`" for t in lst]) if lst else "–"
 
@@ -389,8 +405,11 @@ def build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_df)
     lines.append(f"  BB Squeeze: {fmt_list(squeezes)}")
 
     # Consecutive days
-    consec_up   = tech_df[tech_df["consec_days"] >= 4].sort_values("consec_days", ascending=False)
-    consec_down = tech_df[tech_df["consec_days"] <= -4].sort_values("consec_days")
+    if "consec_days" in tech_df.columns and not tech_df.empty:
+        consec_up   = tech_df[tech_df["consec_days"] >= 4].sort_values("consec_days", ascending=False)
+        consec_down = tech_df[tech_df["consec_days"] <= -4].sort_values("consec_days")
+    else:
+        consec_up = consec_down = tech_df.iloc[0:0]
     if not consec_up.empty:
         c = ", ".join([f"`{r['ticker']}` ({r['consec_days']}h)" for _, r in consec_up.iterrows()])
         lines.append(f"  📈 Naik {consec_up['consec_days'].min()}+ hari berturut: {c}")
