@@ -1,16 +1,20 @@
+import os
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import requests
 from datetime import datetime, date
+from dotenv import load_dotenv
 import time
 import warnings
 warnings.filterwarnings("ignore")
 
+load_dotenv()
+
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-TELEGRAM_TOKEN = "YOUR_BOT_TOKEN"
-TELEGRAM_CHAT_ID = "YOUR_CHAT_ID"
-WATCHLIST_TOP_N = 5
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+WATCHLIST_TOP_N  = int(os.getenv("WATCHLIST_TOP_N", 5))
 
 # ─── IDX TICKERS ──────────────────────────────────────────────────────────────
 from tickers import IDX_TICKERS
@@ -498,8 +502,11 @@ def run():
     print("="*50)
     print(message)
 
-    # Send to Telegram (uncomment when ready)
-    # send_telegram(message, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
+    # Send to Telegram
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        send_telegram(message, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
+    else:
+        print("⚠️  TELEGRAM_TOKEN atau TELEGRAM_CHAT_ID belum diset di .env")
 
 if __name__ == "__main__":
     run()
