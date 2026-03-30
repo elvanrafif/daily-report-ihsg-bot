@@ -22,7 +22,6 @@ SEP = "━━━━━━━━━━━━━━━━━━━━━━"
 def get_tickers():
     return [f"{t}.JK" for t in IDX_TICKERS]
 
-# ─── FETCH ────────────────────────────────────────────────────────────────────
 def fetch_all_data(tickers):
     print(f"📥 Fetching {len(tickers)} tickers (60d)...")
     raw = yf.download(
@@ -56,7 +55,6 @@ def extract_ticker_data(raw, tickers):
     print(f"✅ {len(result)} tickers berhasil diproses")
     return result
 
-# ─── IHSG & GLOBAL ────────────────────────────────────────────────────────────
 def get_ihsg():
     try:
         df = yf.download("^JKSE", period="5d", interval="1d",
@@ -88,7 +86,6 @@ def get_global_data():
     }
     return {name: fetch_single(sym) for name, sym in symbols.items()}
 
-# ─── MOVERS ───────────────────────────────────────────────────────────────────
 def compute_movers(ticker_data):
     rows = []
     for ticker, df in ticker_data.items():
@@ -102,22 +99,15 @@ def compute_movers(ticker_data):
             l    = float(df["Low"].iloc[-1])
             o    = float(df["Open"].iloc[-1])
             rng  = h - l
-
-            # Nilai transaksi hari ini (harga × volume)
             nilai = ct * vol
-
-            # Performance 1 bulan (~21 trading days)
             perf_1m = None
             if len(df) >= 22:
-                p1m    = float(df["Close"].iloc[-22])
+                p1m = float(df["Close"].iloc[-22])
                 perf_1m = (ct - p1m) / p1m * 100
-
-            # ADR 14 hari
             adr = None
             if len(df) >= 14:
-                dr  = (df["High"].tail(14) - df["Low"].tail(14)) / df["Close"].tail(14) * 100
+                dr = (df["High"].tail(14) - df["Low"].tail(14)) / df["Close"].tail(14) * 100
                 adr = float(dr.mean())
-
             rows.append({
                 "ticker":     ticker.replace(".JK", ""),
                 "close":      ct,
@@ -134,37 +124,29 @@ def compute_movers(ticker_data):
             pass
     return pd.DataFrame(rows)
 
-# ─── TECHNICALS ───────────────────────────────────────────────────────────────
 def compute_technicals(ticker_data):
     signals = []
     for ticker, df in ticker_data.items():
         if len(df) < 26: continue
         try:
             close = df["Close"].squeeze().astype(float)
-            high  = df["High"].squeeze().astype(float)
-            low   = df["Low"].squeeze().astype(float)
             if not isinstance(close, pd.Series) or len(close) < 26: continue
 
-            # RSI
             rsi_s = ta.rsi(close, length=14)
             rsi   = float(rsi_s.iloc[-1]) if rsi_s is not None and not rsi_s.isna().all() else None
 
-            # MA
-            ma20 = float(ta.sma(close, length=20).iloc[-1])
-            ma50 = float(ta.sma(close, length=50).iloc[-1]) if len(df) >= 50 else None
-            ma200= float(ta.sma(close, length=200).iloc[-1]) if len(df) >= 200 else None
+            ma20  = float(ta.sma(close, length=20).iloc[-1])
+            ma50  = float(ta.sma(close, length=50).iloc[-1]) if len(df) >= 50 else None
+            ma200 = float(ta.sma(close, length=200).iloc[-1]) if len(df) >= 200 else None
 
-            # SMA alignment (dari screener)
             cn = float(close.iloc[-1])
-            sma_full    = False
-            sma_relaxed = False
+            sma_full = sma_relaxed = False
             if ma50 and ma200:
                 sma_relaxed = cn > ma50 > ma200
                 if ma20:
                     sma_full = cn > ma20 > ma50 > ma200
 
-            # MACD
-            macd_df   = ta.macd(close)
+            macd_df = ta.macd(close)
             macd_bull = macd_bear = False
             if macd_df is not None and len(macd_df) >= 2:
                 cols = macd_df.columns.tolist()
@@ -176,7 +158,6 @@ def compute_technicals(ticker_data):
                     macd_bull = ml2 <= sl2 and ml > sl
                     macd_bear = ml2 >= sl2 and ml < sl
 
-            # BB Squeeze
             bb = ta.bbands(close, length=20)
             bb_squeeze = False
             if bb is not None and len(bb) >= 6:
@@ -184,13 +165,11 @@ def compute_technicals(ticker_data):
                 if bwc:
                     bb_squeeze = float(bb[bwc[0]].iloc[-1]) < float(bb[bwc[0]].iloc[-6]) * 0.8
 
-            # Breakout/Breakdown 20H
             breakout = breakdown = False
             if len(df) >= 21:
                 breakout  = cn > float(close.iloc[-21:-1].max())
                 breakdown = cn < float(close.iloc[-21:-1].min())
 
-            # Golden/Death cross MA20 vs MA50
             golden_cross = death_cross = False
             if ma50 is not None and len(df) >= 51:
                 ma20p = float(ta.sma(close, length=20).iloc[-2])
@@ -198,7 +177,6 @@ def compute_technicals(ticker_data):
                 golden_cross = ma20p <= ma50p and ma20 > ma50
                 death_cross  = ma20p >= ma50p and ma20 < ma50
 
-            # Consecutive days
             direction = 1 if float(close.iloc[-1]) > float(close.iloc[-2]) else -1
             consec = 0
             for i in range(len(close) - 1, 0, -1):
@@ -208,8 +186,8 @@ def compute_technicals(ticker_data):
                     break
 
             signals.append({
-                "ticker": ticker.replace(".JK", ""),
-                "rsi": rsi, "ma20": ma20, "ma50": ma50, "ma200": ma200, "close": cn,
+                "ticker": ticker.replace(".JK", ""), "rsi": rsi,
+                "ma20": ma20, "ma50": ma50, "ma200": ma200, "close": cn,
                 "sma_full": sma_full, "sma_relaxed": sma_relaxed,
                 "golden_cross": golden_cross, "death_cross": death_cross,
                 "macd_bull": macd_bull, "macd_bear": macd_bear,
@@ -224,17 +202,13 @@ def compute_technicals(ticker_data):
             "breakout","breakdown","bb_squeeze","consec_days"]
     return pd.DataFrame(signals) if signals else pd.DataFrame(columns=cols)
 
-# ─── WATCHLIST (TIER A+/A/B dari screener) ────────────────────────────────────
 def compute_watchlist(movers_df, tech_df):
     if movers_df.empty or tech_df.empty:
         return {"A+": [], "A": [], "B": []}
-
     merged = movers_df.merge(tech_df, on="ticker", how="inner")
     if merged.empty:
         return {"A+": [], "A": [], "B": []}
-
     tiers = {"A+": [], "A": [], "B": []}
-
     for _, r in merged.iterrows():
         perf_1m  = r.get("perf_1m")
         adr      = r.get("adr") or 0
@@ -242,27 +216,17 @@ def compute_watchlist(movers_df, tech_df):
         sma_full = r.get("sma_full", False)
         sma_rel  = r.get("sma_relaxed", False)
         ticker   = r["ticker"]
-
-        if perf_1m is None:
-            continue
-
-        # Tier A+: momentum super kuat
-        if (perf_1m > 30 and nilai > 1e9 and adr > 4.0 and sma_full):
+        if perf_1m is None: continue
+        if perf_1m > 30 and nilai > 1e9 and adr > 4.0 and sma_full:
             tiers["A+"].append(ticker)
-        # Tier A: momentum kuat
-        elif (perf_1m > 15 and nilai > 500e6 and adr > 3.0 and sma_full):
+        elif perf_1m > 15 and nilai > 500e6 and adr > 3.0 and sma_full:
             tiers["A"].append(ticker)
-        # Tier B: early detection
-        elif (perf_1m > 5 and nilai > 250e6 and adr > 2.5 and sma_rel):
+        elif perf_1m > 5 and nilai > 250e6 and adr > 2.5 and sma_rel:
             tiers["B"].append(ticker)
-
-    # Sort alphabetically
     for t in tiers:
         tiers[t].sort()
-
     return tiers
 
-# ─── HELPERS ──────────────────────────────────────────────────────────────────
 def fmt_pct(val):
     if val is None: return "N/A"
     return f"+{val:.2f}%" if val > 0 else f"{val:.2f}%"
@@ -272,7 +236,6 @@ def fmt_num(val, dec=2):
     return f"{val:,.{dec}f}"
 
 def fmt_nilai(val):
-    """Format nilai transaksi ke Rp T / M / K."""
     if val is None: return "N/A"
     if val >= 1e12: return f"Rp {val/1e12:.2f}T"
     if val >= 1e9:  return f"Rp {val/1e9:.1f}M"
@@ -284,142 +247,126 @@ def safe_filter(df, col, fn):
     try: return df[fn(df[col])]["ticker"].tolist()
     except: return []
 
-def fmt_ticker_rows(lst, per_row=5):
-    """Format list ticker jadi baris-baris, per_row ticker per baris."""
+def ticker_rows(lst, per_row=5):
     if not lst: return ["–"]
     rows = []
     for i in range(0, len(lst), per_row):
         chunk = lst[i:i+per_row]
-        rows.append(" ".join([f"`{t}`" for t in chunk]))
+        rows.append(" ".join([f"<code>{t}</code>" for t in chunk]))
     return rows
 
-# ─── BUILD MESSAGE ────────────────────────────────────────────────────────────
 def build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_tiers):
     today = datetime.now().strftime("%A, %d %B %Y")
     L = []
 
-    # Header
-    L.append("📊 *RINGKASAN PASAR IDX*")
+    L.append("📊 <b>RINGKASAN PASAR IDX</b>")
     L.append(f"📅 {today}")
     L.append("")
 
-    # IHSG + A/D
     if ihsg:
         em = "🟢" if ihsg_pct > 0 else "🔴"
-        L.append(f"*🇮🇩 IHSG:* {fmt_num(ihsg, 0)} {em} {fmt_pct(ihsg_pct)}")
+        L.append(f"<b>🇮🇩 IHSG:</b> {fmt_num(ihsg, 0)} {em} {fmt_pct(ihsg_pct)}")
     else:
-        L.append("*🇮🇩 IHSG:* Tidak tersedia")
+        L.append("<b>🇮🇩 IHSG:</b> Tidak tersedia")
 
     if not movers_df.empty:
         adv  = int((movers_df["change_pct"] > 0).sum())
         dec  = int((movers_df["change_pct"] < 0).sum())
         flat = int((movers_df["change_pct"] == 0).sum())
-        L.append(f"*📊 A/D:* 🟢 {adv} emiten naik  🔴 {dec} emiten turun  ⚪ {flat} emiten flat")
+        L.append(f"<b>📊 A/D:</b> 🟢 {adv} emiten naik  🔴 {dec} emiten turun  ⚪ {flat} emiten flat")
     L.append(SEP)
 
-    # Top 5 Gainer & Loser
-    L.append("*🚀 Top 5 Gainer*")
+    L.append("<b>🚀 Top 5 Gainer</b>")
     if not movers_df.empty:
         for _, r in movers_df.nlargest(5, "change_pct").iterrows():
-            L.append(f"  `{r['ticker']}` {fmt_pct(r['change_pct'])}")
+            L.append(f"  <code>{r['ticker']}</code> {fmt_pct(r['change_pct'])}")
     L.append("")
 
-    L.append("*📉 Top 5 Loser*")
+    L.append("<b>📉 Top 5 Loser</b>")
     if not movers_df.empty:
         for _, r in movers_df.nsmallest(5, "change_pct").iterrows():
-            L.append(f"  `{r['ticker']}` {fmt_pct(r['change_pct'])}")
+            L.append(f"  <code>{r['ticker']}</code> {fmt_pct(r['change_pct'])}")
     L.append(SEP)
 
-    # Top Nilai Transaksi
-    L.append("*💹 Top 5 Nilai Transaksi Harian*")
+    L.append("<b>💹 Top 5 Nilai Transaksi Harian</b>")
     if not movers_df.empty and "nilai" in movers_df.columns:
         for _, r in movers_df.nlargest(5, "nilai").iterrows():
-            L.append(f"  `{r['ticker']}` {fmt_nilai(r['nilai'])}")
+            L.append(f"  <code>{r['ticker']}</code> {fmt_nilai(r['nilai'])}")
     L.append(SEP)
 
-    # Unusual Activity
-    L.append("*🔍 Unusual Activity*")
+    L.append("<b>🔍 Unusual Activity</b>")
     if not movers_df.empty:
         unusual = movers_df[movers_df["vol_ratio"] > 2].sort_values("vol_ratio", ascending=False).head(5)
         if unusual.empty:
             L.append("  Tidak ada unusual volume hari ini")
         else:
             for _, r in unusual.iterrows():
-                L.append(f"  `{r['ticker']}` {r['vol_ratio']:.1f}x rata-rata | {fmt_pct(r['change_pct'])}")
+                L.append(f"  <code>{r['ticker']}</code> {r['vol_ratio']:.1f}x rata-rata | {fmt_pct(r['change_pct'])}")
 
         ara = movers_df[movers_df["change_pct"] >= 24.9]
         arb = movers_df[movers_df["change_pct"] <= -24.9]
         if not ara.empty:
-            L.append(f"  🔺 ARA: {' '.join([f'`{t}`' for t in ara['ticker']])}")
+            tickers_ara = " ".join([f"<code>{t}</code>" for t in ara["ticker"]])
+            L.append(f"  🔺 ARA: {tickers_ara}")
         if not arb.empty:
-            L.append(f"  🔻 ARB: {' '.join([f'`{t}`' for t in arb['ticker']])}")
+            tickers_arb = " ".join([f"<code>{t}</code>" for t in arb["ticker"]])
+            L.append(f"  🔻 ARB: {tickers_arb}")
 
         gu = movers_df[movers_df["gap_pct"] > 2].sort_values("gap_pct", ascending=False).head(3)
         gd = movers_df[movers_df["gap_pct"] < -2].sort_values("gap_pct").head(3)
         if not gu.empty:
-            L.append("  ⬆️ Gap Up: " + "  ".join([f"`{r['ticker']}` +{r['gap_pct']:.1f}%" for _, r in gu.iterrows()]))
+            g = "  ".join([f"<code>{r['ticker']}</code> +{r['gap_pct']:.1f}%" for _, r in gu.iterrows()])
+            L.append(f"  ⬆️ Gap Up: {g}")
         if not gd.empty:
-            L.append("  ⬇️ Gap Down: " + "  ".join([f"`{r['ticker']}` {r['gap_pct']:.1f}%" for _, r in gd.iterrows()]))
+            g = "  ".join([f"<code>{r['ticker']}</code> {r['gap_pct']:.1f}%" for _, r in gd.iterrows()])
+            L.append(f"  ⬇️ Gap Down: {g}")
     L.append(SEP)
 
-    # Top Momentum 1 Bulan
-    L.append("*📈 Top 5 Momentum 1 Bulan*")
+    L.append("<b>📈 Top 5 Momentum 1 Bulan</b>")
     if not movers_df.empty and "perf_1m" in movers_df.columns:
         top_mom = movers_df.dropna(subset=["perf_1m"]).nlargest(5, "perf_1m")
         for _, r in top_mom.iterrows():
-            L.append(f"  `{r['ticker']}` {fmt_pct(r['perf_1m'])}")
+            L.append(f"  <code>{r['ticker']}</code> {fmt_pct(r['perf_1m'])}")
     L.append(SEP)
 
-    # Sinyal Teknikal
-    L.append("*⚡ Sinyal Teknikal*")
+    L.append("<b>⚡ Sinyal Teknikal</b>")
     if tech_df.empty:
         L.append("  Data tidak tersedia")
     else:
         def add_signal(label, lst):
             if lst:
                 L.append(f"\n{label}")
-                for row in fmt_ticker_rows(lst):
+                for row in ticker_rows(lst):
                     L.append(f"  {row}")
             else:
                 L.append(f"{label} –")
 
-        oversold   = safe_filter(tech_df, "rsi",          lambda x: x < 30)
-        overbought = safe_filter(tech_df, "rsi",          lambda x: x > 70)
-        golden     = safe_filter(tech_df, "golden_cross", lambda x: x == True)
-        death      = safe_filter(tech_df, "death_cross",  lambda x: x == True)
-        macd_b     = safe_filter(tech_df, "macd_bull",    lambda x: x == True)
-        macd_br    = safe_filter(tech_df, "macd_bear",    lambda x: x == True)
-        breakouts  = safe_filter(tech_df, "breakout",     lambda x: x == True)
-        breakdowns = safe_filter(tech_df, "breakdown",    lambda x: x == True)
-        squeezes   = safe_filter(tech_df, "bb_squeeze",   lambda x: x == True)
-
-        add_signal("RSI Oversold (<30):", oversold)
-        add_signal("RSI Overbought (>70):", overbought)
-        add_signal("Golden Cross (MA20>MA50):", golden)
-        add_signal("Death Cross:", death)
-        add_signal("MACD Bullish:", macd_b)
-        add_signal("MACD Bearish:", macd_br)
-        add_signal("Breakout 20H:", breakouts)
-        add_signal("Breakdown 20L:", breakdowns)
-        add_signal("BB Squeeze:", squeezes)
+        add_signal("RSI Oversold (&lt;30):",    safe_filter(tech_df, "rsi", lambda x: x < 30))
+        add_signal("RSI Overbought (&gt;70):",  safe_filter(tech_df, "rsi", lambda x: x > 70))
+        add_signal("Golden Cross (MA20&gt;MA50):", safe_filter(tech_df, "golden_cross", lambda x: x == True))
+        add_signal("Death Cross:",              safe_filter(tech_df, "death_cross",  lambda x: x == True))
+        add_signal("MACD Bullish:",             safe_filter(tech_df, "macd_bull",    lambda x: x == True))
+        add_signal("MACD Bearish:",             safe_filter(tech_df, "macd_bear",    lambda x: x == True))
+        add_signal("Breakout 20H:",             safe_filter(tech_df, "breakout",     lambda x: x == True))
+        add_signal("Breakdown 20L:",            safe_filter(tech_df, "breakdown",    lambda x: x == True))
+        add_signal("BB Squeeze:",               safe_filter(tech_df, "bb_squeeze",   lambda x: x == True))
 
         if "consec_days" in tech_df.columns:
             cup   = tech_df[tech_df["consec_days"] >= 4].sort_values("consec_days", ascending=False)
             cdown = tech_df[tech_df["consec_days"] <= -4].sort_values("consec_days")
             if not cup.empty:
                 L.append("\n📈 Naik berturut-turut:")
-                items = [f"`{r['ticker']}` ({r['consec_days']}h)" for _, r in cup.iterrows()]
-                for row in fmt_ticker_rows(items, per_row=4):
+                items = [f"<code>{r['ticker']}</code> ({r['consec_days']}h)" for _, r in cup.iterrows()]
+                for row in ticker_rows(items, per_row=4):
                     L.append(f"  {row}")
             if not cdown.empty:
                 L.append("\n📉 Turun berturut-turut:")
-                items = [f"`{r['ticker']}` ({abs(r['consec_days'])}h)" for _, r in cdown.iterrows()]
-                for row in fmt_ticker_rows(items, per_row=4):
+                items = [f"<code>{r['ticker']}</code> ({abs(r['consec_days'])}h)" for _, r in cdown.iterrows()]
+                for row in ticker_rows(items, per_row=4):
                     L.append(f"  {row}")
     L.append(SEP)
 
-    # Global & Komoditas
-    L.append("*🌍 Global & Komoditas*")
+    L.append("<b>🌍 Global &amp; Komoditas</b>")
     def gfmt(name, data):
         if not data: return f"  {name}: N/A"
         em = "🟢" if data["pct"] > 0 else "🔴"
@@ -428,49 +375,35 @@ def build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_tie
         L.append(gfmt(name, global_data.get(name)))
     L.append(SEP)
 
-    # Watchlist Tier A+/A/B
-    L.append("*🎯 Watchlist Besok*")
-    L.append("_Screening otomatis — bukan rekomendasi finansial_")
+    L.append("<b>🎯 Watchlist Besok</b>")
+    L.append("<i>Screening otomatis — bukan rekomendasi finansial</i>")
     L.append("")
 
     ap = watchlist_tiers.get("A+", [])
     a  = watchlist_tiers.get("A",  [])
     b  = watchlist_tiers.get("B",  [])
 
-    if ap:
-        L.append("⭐ *A+ (Super Momentum):*")
-        for row in fmt_ticker_rows(ap):
-            L.append(f"  {row}")
-    else:
-        L.append("⭐ *A+:* –")
+    L.append("⭐ <b>A+ (Super Momentum):</b>")
+    for row in ticker_rows(ap): L.append(f"  {row}")
 
-    if a:
-        L.append("✅ *A (Momentum Kuat):*")
-        for row in fmt_ticker_rows(a):
-            L.append(f"  {row}")
-    else:
-        L.append("✅ *A:* –")
+    L.append("✅ <b>A (Momentum Kuat):</b>")
+    for row in ticker_rows(a): L.append(f"  {row}")
 
-    if b:
-        L.append("🔵 *B (Early Detection):*")
-        for row in fmt_ticker_rows(b):
-            L.append(f"  {row}")
-    else:
-        L.append("🔵 *B:* –")
+    L.append("🔵 <b>B (Early Detection):</b>")
+    for row in ticker_rows(b): L.append(f"  {row}")
 
     L.append(SEP)
-    L.append("_Data: yfinance | Jam 17.00 WIB_")
-    L.append("⚠️ _Bukan rekomendasi investasi. DYOR._")
+    L.append("<i>Data: yfinance | Jam 17.00 WIB</i>")
+    L.append("⚠️ <i>Bukan rekomendasi investasi. DYOR.</i>")
 
     return "\n".join(L)
 
-# ─── SEND TELEGRAM ────────────────────────────────────────────────────────────
 def send_telegram(message, token, chat_id):
     url    = f"https://api.telegram.org/bot{token}/sendMessage"
     chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
     for i, chunk in enumerate(chunks):
         resp = requests.post(url, json={
-            "chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"
+            "chat_id": chat_id, "text": chunk, "parse_mode": "HTML"
         })
         if not resp.ok:
             print(f"❌ Telegram error: {resp.text}")
@@ -478,7 +411,6 @@ def send_telegram(message, token, chat_id):
             print(f"✅ Pesan {i+1}/{len(chunks)} terkirim")
         time.sleep(0.5)
 
-# ─── MAIN ─────────────────────────────────────────────────────────────────────
 def run():
     print(f"\n{'='*50}")
     print(f"🚀 IDX Daily Report — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
