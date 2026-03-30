@@ -100,10 +100,16 @@ def compute_movers(ticker_data):
             o    = float(df["Open"].iloc[-1])
             rng  = h - l
             nilai = ct * vol
-            perf_1m = None
+            perf_1m = perf_3m = perf_6m = None
             if len(df) >= 22:
                 p1m = float(df["Close"].iloc[-22])
                 perf_1m = (ct - p1m) / p1m * 100
+            if len(df) >= 64:
+                p3m = float(df["Close"].iloc[-64])
+                perf_3m = (ct - p3m) / p3m * 100
+            if len(df) >= 127:
+                p6m = float(df["Close"].iloc[-127])
+                perf_6m = (ct - p6m) / p6m * 100
             adr = None
             if len(df) >= 14:
                 dr = (df["High"].tail(14) - df["Low"].tail(14)) / df["Close"].tail(14) * 100
@@ -335,47 +341,6 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
         top_mom = movers_df.dropna(subset=["perf_1m"]).nlargest(5, "perf_1m")
         for _, r in top_mom.iterrows():
             L.append(f"  <code>{r['ticker']}</code> {fmt_pct(r['perf_1m'])}")
-    L.append(SEP)
-
-    L.append("<b>⚡ Sinyal Teknikal</b>")
-    if tech_df.empty:
-        L.append("  Data tidak tersedia")
-    else:
-        def add_signal(label, lst):
-            if lst:
-                L.append("")
-                L.append(label)
-                for row in ticker_rows(lst):
-                    L.append(f"  {row}")
-            else:
-                L.append(f"{label} –")
-
-        add_signal("RSI Oversold (&lt;30):",    safe_filter(tech_df, "rsi", lambda x: x < 30))
-        add_signal("RSI Overbought (&gt;70):",  safe_filter(tech_df, "rsi", lambda x: x > 70))
-        add_signal("Golden Cross (MA20&gt;MA50):", safe_filter(tech_df, "golden_cross", lambda x: x == True))
-        add_signal("Death Cross:",              safe_filter(tech_df, "death_cross",  lambda x: x == True))
-        add_signal("MACD Bullish:",             safe_filter(tech_df, "macd_bull",    lambda x: x == True))
-        add_signal("MACD Bearish:",             safe_filter(tech_df, "macd_bear",    lambda x: x == True))
-        add_signal("Breakout 20H:",             safe_filter(tech_df, "breakout",     lambda x: x == True))
-        add_signal("Breakdown 20L:",            safe_filter(tech_df, "breakdown",    lambda x: x == True))
-        add_signal("BB Squeeze:",               safe_filter(tech_df, "bb_squeeze",   lambda x: x == True))
-
-        if "consec_days" in tech_df.columns:
-            cup   = tech_df[tech_df["consec_days"] >= 4].sort_values("consec_days", ascending=False)
-            cdown = tech_df[tech_df["consec_days"] <= -4].sort_values("consec_days")
-            if not cup.empty:
-                L.append("")
-                L.append("📈 Naik berturut-turut:")
-                items = [f"<code>{r['ticker']}</code>({r['consec_days']}h)" for _, r in cup.iterrows()]
-                # items already HTML, join directly without wrapping in ticker_rows
-                for i in range(0, len(items), 4):
-                    L.append("  " + "  ".join(items[i:i+4]))
-            if not cdown.empty:
-                L.append("")
-                L.append("📉 Turun berturut-turut:")
-                items = [f"<code>{r['ticker']}</code>({abs(r['consec_days'])}h)" for _, r in cdown.iterrows()]
-                for i in range(0, len(items), 4):
-                    L.append("  " + "  ".join(items[i:i+4]))
     L.append(SEP)
 
     L.append("<b>🌍 Global &amp; Komoditas</b>")
