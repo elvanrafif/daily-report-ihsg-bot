@@ -404,8 +404,26 @@ def build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_tie
     return "\n".join(L)
 
 def send_telegram(message, token, chat_id):
-    url    = f"https://api.telegram.org/bot{token}/sendMessage"
-    chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
+    """Split by SEP sections to avoid cutting HTML tags mid-chunk."""
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    SEP_LINE = "━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Split into sections by separator
+    sections = message.split(SEP_LINE)
+
+    # Regroup sections into chunks under 4000 chars
+    chunks = []
+    current = ""
+    for section in sections:
+        candidate = current + (SEP_LINE + "\n" if current else "") + section
+        if len(candidate) > 3800 and current:
+            chunks.append(current.strip())
+            current = section
+        else:
+            current = candidate
+    if current.strip():
+        chunks.append(current.strip())
+
     for i, chunk in enumerate(chunks):
         resp = requests.post(url, json={
             "chat_id": chat_id, "text": chunk, "parse_mode": "HTML"
@@ -414,7 +432,7 @@ def send_telegram(message, token, chat_id):
             print(f"❌ Telegram error: {resp.text}")
         else:
             print(f"✅ Pesan {i+1}/{len(chunks)} terkirim")
-        time.sleep(0.5)
+        time.sleep(1)
 
 def run():
     print(f"\n{'='*50}")
