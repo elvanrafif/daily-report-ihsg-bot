@@ -17,7 +17,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 from tickers import IDX_TICKERS
 
-SEP = "━━━━━━━━━━━━━━━━━━━━━━"
+SEP = "──────────────────────"
 
 def get_tickers():
     return [f"{t}.JK" for t in IDX_TICKERS]
@@ -274,7 +274,7 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
     L = []
 
     # ── Header ──
-    L.append("📊 <b>IDX DAILY MARKET REPORT</b>")
+    L.append("📊 <b>IDX DAILY MARKET REPORT by Elvanrff</b>")
     L.append(f"📅 {today}")
     L.append("")
 
@@ -289,6 +289,7 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
         dec  = int((movers_df["change_pct"] < 0).sum())
         flat = int((movers_df["change_pct"] == 0).sum())
         L.append(f"<b>📊 A/D:</b> 🟢 {adv} ▲  🔴 {dec} ▼  ⚪ {flat} —")
+    L.append("")
     L.append(SEP)
 
     # ── Movers ──
@@ -301,6 +302,7 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
     if not movers_df.empty:
         for _, r in movers_df.nsmallest(5, "change_pct").iterrows():
             L.append(f"  <code>{r['ticker']}</code> {fmt_pct(r['change_pct'])}")
+    L.append("")
     L.append(SEP)
 
     # ── Nilai Transaksi ──
@@ -309,6 +311,7 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
         top_nilai = movers_df.dropna(subset=["nilai"]).nlargest(5, "nilai")
         for _, r in top_nilai.iterrows():
             L.append(f"  <code>{r['ticker']}</code> {fmt_nilai(r['nilai'])}")
+    L.append("")
     L.append(SEP)
 
     # ── Unusual Activity ──
@@ -338,6 +341,7 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
         if not gd.empty:
             g = "  ".join([f"<code>{r['ticker']}</code> {r['gap_pct']:.1f}%" for _, r in gd.iterrows()])
             L.append(f"  ⬇️ Gap Down: {g}")
+    L.append("")
     L.append(SEP)
 
     # ── Momentum ──
@@ -346,6 +350,7 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
         top_mom = movers_df.dropna(subset=["perf_1m"]).nlargest(5, "perf_1m")
         for _, r in top_mom.iterrows():
             L.append(f"  <code>{r['ticker']}</code> {fmt_pct(r['perf_1m'])}")
+    L.append("")
     L.append(SEP)
 
     # ── Global ──
@@ -357,6 +362,7 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
     for name in ["S&P500","Nasdaq","DJIA","USD/IDR","Gold","Crude Oil","US10Y"]:
         key = "Emas" if name == "Gold" else name
         L.append(gfmt(name, global_data.get(key)))
+    L.append("")
     L.append(SEP)
 
     # ── Watchlist ──
@@ -376,6 +382,7 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
     L.append("")
     L.append("🔵 <b>B (Early Detection):</b>")
     for row in ticker_rows(b): L.append(f"  {row}")
+    L.append("")
     L.append(SEP)
     L.append("<i>Data: yfinance | Sent at 17.00 WIB</i>")
     L.append("⚠️ <i>Not investment advice. DYOR.</i>")
@@ -385,7 +392,7 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
 def send_telegram(message, token, chat_id):
     """Split by SEP sections to avoid cutting HTML tags mid-chunk."""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    SEP_LINE = "━━━━━━━━━━━━━━━━━━━━━━"
+    SEP_LINE = "──────────────────────"
 
     # Split into sections by separator
     sections = message.split(SEP_LINE)
