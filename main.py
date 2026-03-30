@@ -99,7 +99,8 @@ def compute_movers(ticker_data):
             l    = float(df["Low"].iloc[-1])
             o    = float(df["Open"].iloc[-1])
             rng  = h - l
-            nilai = ct * vol
+            avg_vol_10d = float(df["Volume"].tail(10).mean())
+            nilai = ct * avg_vol_10d  # avg 10 hari seperti screener
             perf_1m = perf_3m = perf_6m = None
             if len(df) >= 22:
                 p1m = float(df["Close"].iloc[-22])
@@ -108,7 +109,7 @@ def compute_movers(ticker_data):
                 p3m = float(df["Close"].iloc[-64])
                 perf_3m = (ct - p3m) / p3m * 100
             if len(df) >= 127:
-                p6m = float(df["Close"].iloc[-127])
+                p6m = float(df["Close"].iloc[-126])
                 perf_6m = (ct - p6m) / p6m * 100
             adr = None
             if len(df) >= 14:
