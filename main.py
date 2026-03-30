@@ -82,7 +82,7 @@ def fetch_single(sym):
 def get_global_data():
     symbols = {
         "S&P500": "^GSPC", "Nasdaq": "^IXIC", "DJIA": "^DJI",
-        "USD/IDR": "IDR=X", "Emas": "GC=F", "Crude Oil": "CL=F", "US10Y": "^TNX",
+        "USD/IDR": "IDR=X", "Emas": "GC=F", "Crude Oil": "CL=F", "US10Y": "^TNX",  # key "Emas" mapped to "Gold" in display
     }
     return {name: fetch_single(sym) for name, sym in symbols.items()}
 
@@ -273,7 +273,8 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
     today = datetime.now().strftime("%A, %d %B %Y")
     L = []
 
-    L.append("📊 <b>RINGKASAN PASAR IDX</b>")
+    # ── Header ──
+    L.append("📊 <b>IDX DAILY MARKET REPORT</b>")
     L.append(f"📅 {today}")
     L.append("")
 
@@ -281,51 +282,53 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
         em = "🟢" if ihsg_pct > 0 else "🔴"
         L.append(f"<b>🇮🇩 IHSG:</b> {fmt_num(ihsg_prev, 0)} → {fmt_num(ihsg, 0)} {em} {fmt_pct(ihsg_pct)}")
     else:
-        L.append("<b>🇮🇩 IHSG:</b> Tidak tersedia")
+        L.append("<b>🇮🇩 IHSG:</b> Data unavailable")
 
     if not movers_df.empty:
         adv  = int((movers_df["change_pct"] > 0).sum())
         dec  = int((movers_df["change_pct"] < 0).sum())
         flat = int((movers_df["change_pct"] == 0).sum())
-        L.append(f"<b>📊 A/D:</b> 🟢 {adv} emiten naik  🔴 {dec} emiten turun  ⚪ {flat} emiten flat")
+        L.append(f"<b>📊 A/D:</b> 🟢 {adv} ▲  🔴 {dec} ▼  ⚪ {flat} —")
     L.append(SEP)
 
-    L.append("<b>🚀 Top 5 Gainer</b>")
+    # ── Movers ──
+    L.append("<b>🚀 Top 5 Gainers</b>")
     if not movers_df.empty:
         for _, r in movers_df.nlargest(5, "change_pct").iterrows():
             L.append(f"  <code>{r['ticker']}</code> {fmt_pct(r['change_pct'])}")
     L.append("")
-
-    L.append("<b>📉 Top 5 Loser</b>")
+    L.append("<b>📉 Top 5 Losers</b>")
     if not movers_df.empty:
         for _, r in movers_df.nsmallest(5, "change_pct").iterrows():
             L.append(f"  <code>{r['ticker']}</code> {fmt_pct(r['change_pct'])}")
     L.append(SEP)
 
-    L.append("<b>💹 Top 5 Nilai Transaksi Harian</b>")
+    # ── Nilai Transaksi ──
+    L.append("<b>💹 Top 5 Transaction Value</b>")
     if not movers_df.empty and "nilai" in movers_df.columns:
         top_nilai = movers_df.dropna(subset=["nilai"]).nlargest(5, "nilai")
         for _, r in top_nilai.iterrows():
             L.append(f"  <code>{r['ticker']}</code> {fmt_nilai(r['nilai'])}")
     L.append(SEP)
 
+    # ── Unusual Activity ──
     L.append("<b>🔍 Unusual Activity</b>")
     if not movers_df.empty:
         unusual = movers_df[movers_df["vol_ratio"] > 2].sort_values("vol_ratio", ascending=False).head(5)
         if unusual.empty:
-            L.append("  Tidak ada unusual volume hari ini")
+            L.append("  No unusual volume today")
         else:
             for _, r in unusual.iterrows():
-                L.append(f"  <code>{r['ticker']}</code> {r['vol_ratio']:.1f}x rata-rata | {fmt_pct(r['change_pct'])}")
+                L.append(f"  <code>{r['ticker']}</code> {r['vol_ratio']:.1f}x avg vol | {fmt_pct(r['change_pct'])}")
 
         ara = movers_df[movers_df["change_pct"] >= 24.9]
         arb = movers_df[movers_df["change_pct"] <= -24.9]
         if not ara.empty:
             tickers_ara = " ".join([f"<code>{t}</code>" for t in ara["ticker"]])
-            L.append(f"  🔺 ARA: {tickers_ara}")
+            L.append(f"  🔺 Upper AR: {tickers_ara}")
         if not arb.empty:
             tickers_arb = " ".join([f"<code>{t}</code>" for t in arb["ticker"]])
-            L.append(f"  🔻 ARB: {tickers_arb}")
+            L.append(f"  🔻 Lower AR: {tickers_arb}")
 
         gu = movers_df[movers_df["gap_pct"] > 2].sort_values("gap_pct", ascending=False).head(3)
         gd = movers_df[movers_df["gap_pct"] < -2].sort_values("gap_pct").head(3)
@@ -337,24 +340,28 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
             L.append(f"  ⬇️ Gap Down: {g}")
     L.append(SEP)
 
-    L.append("<b>📈 Top 5 Momentum 1 Bulan</b>")
+    # ── Momentum ──
+    L.append("<b>📈 Top 5 Monthly Momentum</b>")
     if not movers_df.empty and "perf_1m" in movers_df.columns:
         top_mom = movers_df.dropna(subset=["perf_1m"]).nlargest(5, "perf_1m")
         for _, r in top_mom.iterrows():
             L.append(f"  <code>{r['ticker']}</code> {fmt_pct(r['perf_1m'])}")
     L.append(SEP)
 
-    L.append("<b>🌍 Global &amp; Komoditas</b>")
+    # ── Global ──
+    L.append("<b>🌍 Global &amp; Commodities</b>")
     def gfmt(name, data):
         if not data: return f"  {name}: N/A"
         em = "🟢" if data["pct"] > 0 else "🔴"
         return f"  {name}: {fmt_num(data['value'])} {em} {fmt_pct(data['pct'])}"
-    for name in ["S&P500","Nasdaq","DJIA","USD/IDR","Emas","Crude Oil","US10Y"]:
-        L.append(gfmt(name, global_data.get(name)))
+    for name in ["S&P500","Nasdaq","DJIA","USD/IDR","Gold","Crude Oil","US10Y"]:
+        key = "Emas" if name == "Gold" else name
+        L.append(gfmt(name, global_data.get(key)))
     L.append(SEP)
 
-    L.append("<b>🎯 Watchlist Besok</b>")
-    L.append("<i>Screening otomatis — bukan rekomendasi finansial</i>")
+    # ── Watchlist ──
+    L.append("<b>🎯 Tomorrow's Watchlist</b>")
+    L.append("<i>Auto-screened — not financial advice</i>")
     L.append("")
 
     ap = watchlist_tiers.get("A+", [])
@@ -363,16 +370,15 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
 
     L.append("⭐ <b>A+ (Super Momentum):</b>")
     for row in ticker_rows(ap): L.append(f"  {row}")
-
-    L.append("✅ <b>A (Momentum Kuat):</b>")
+    L.append("")
+    L.append("✅ <b>A (Strong Momentum):</b>")
     for row in ticker_rows(a): L.append(f"  {row}")
-
+    L.append("")
     L.append("🔵 <b>B (Early Detection):</b>")
     for row in ticker_rows(b): L.append(f"  {row}")
-
     L.append(SEP)
-    L.append("<i>Data: yfinance | Jam 17.00 WIB</i>")
-    L.append("⚠️ <i>Bukan rekomendasi investasi. DYOR.</i>")
+    L.append("<i>Data: yfinance | Sent at 17.00 WIB</i>")
+    L.append("⚠️ <i>Not investment advice. DYOR.</i>")
 
     return "\n".join(L)
 
