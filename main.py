@@ -290,7 +290,8 @@ def build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_tie
 
     L.append("<b>💹 Top 5 Nilai Transaksi Harian</b>")
     if not movers_df.empty and "nilai" in movers_df.columns:
-        for _, r in movers_df.nlargest(5, "nilai").iterrows():
+        top_nilai = movers_df.dropna(subset=["nilai"]).nlargest(5, "nilai")
+        for _, r in top_nilai.iterrows():
             L.append(f"  <code>{r['ticker']}</code> {fmt_nilai(r['nilai'])}")
     L.append(SEP)
 
@@ -335,7 +336,8 @@ def build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_tie
     else:
         def add_signal(label, lst):
             if lst:
-                L.append(f"\n{label}")
+                L.append("")
+                L.append(label)
                 for row in ticker_rows(lst):
                     L.append(f"  {row}")
             else:
@@ -355,15 +357,18 @@ def build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_tie
             cup   = tech_df[tech_df["consec_days"] >= 4].sort_values("consec_days", ascending=False)
             cdown = tech_df[tech_df["consec_days"] <= -4].sort_values("consec_days")
             if not cup.empty:
-                L.append("\n📈 Naik berturut-turut:")
-                items = [f"<code>{r['ticker']}</code> ({r['consec_days']}h)" for _, r in cup.iterrows()]
-                for row in ticker_rows(items, per_row=4):
-                    L.append(f"  {row}")
+                L.append("")
+                L.append("📈 Naik berturut-turut:")
+                items = [f"<code>{r['ticker']}</code>({r['consec_days']}h)" for _, r in cup.iterrows()]
+                # items already HTML, join directly without wrapping in ticker_rows
+                for i in range(0, len(items), 4):
+                    L.append("  " + "  ".join(items[i:i+4]))
             if not cdown.empty:
-                L.append("\n📉 Turun berturut-turut:")
-                items = [f"<code>{r['ticker']}</code> ({abs(r['consec_days'])}h)" for _, r in cdown.iterrows()]
-                for row in ticker_rows(items, per_row=4):
-                    L.append(f"  {row}")
+                L.append("")
+                L.append("📉 Turun berturut-turut:")
+                items = [f"<code>{r['ticker']}</code>({abs(r['consec_days'])}h)" for _, r in cdown.iterrows()]
+                for i in range(0, len(items), 4):
+                    L.append("  " + "  ".join(items[i:i+4]))
     L.append(SEP)
 
     L.append("<b>🌍 Global &amp; Komoditas</b>")
