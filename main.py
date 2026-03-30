@@ -17,7 +17,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 from tickers import IDX_TICKERS
 
-SEP = "──────────"
+SEP = "──────────────"
 
 def get_tickers():
     return [f"{t}.JK" for t in IDX_TICKERS]
@@ -288,7 +288,9 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
         adv  = int((movers_df["change_pct"] > 0).sum())
         dec  = int((movers_df["change_pct"] < 0).sum())
         flat = int((movers_df["change_pct"] == 0).sum())
-        L.append(f"<b>📊 A/D:</b> 🟢 {adv} ▲  🔴 {dec} ▼  ⚪ {flat} —")
+        total = adv + dec + flat
+        L.append(f"<b>📊 Stock Movement ({total} stocks)</b>")
+        L.append(f"🟢 {adv} advancing  🔴 {dec} declining  ⚪ {flat} unchanged")
     L.append("")
     L.append(SEP)
 
@@ -392,7 +394,7 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
 def send_telegram(message, token, chat_id):
     """Split by SEP sections to avoid cutting HTML tags mid-chunk."""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    SEP_LINE = "──────────"
+    SEP_LINE = "──────────────"
 
     # Split into sections by separator
     sections = message.split(SEP_LINE)
