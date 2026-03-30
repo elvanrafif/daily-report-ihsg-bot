@@ -1,6 +1,6 @@
-yfinance==0.2.55
-pandas==2.2.3
-pandas-ta==0.4.71b0
-requests==2.32.3
-schedule==1.2.2
-python-dotenv==1.0.1
+yfinance>=0.2.50
+pandas>=2.3.2
+pandas-ta>=0.4.71b0
+requests>=2.32.0
+schedule>=1.2.0
+python-dotenv>=1.0.0
