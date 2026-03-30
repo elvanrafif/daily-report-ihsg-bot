@@ -3,7 +3,7 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import requests
-from datetime import datetime, date
+from datetime import datetime
 from dotenv import load_dotenv
 import time
 import warnings
@@ -11,521 +11,403 @@ warnings.filterwarnings("ignore")
 
 load_dotenv()
 
-# ─── CONFIG ───────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 WATCHLIST_TOP_N  = int(os.getenv("WATCHLIST_TOP_N", 5))
 
-# ─── IDX TICKERS ──────────────────────────────────────────────────────────────
 from tickers import IDX_TICKERS
 
 def get_tickers():
-    """Return list of IDX tickers with .JK suffix for yfinance."""
     return [f"{t}.JK" for t in IDX_TICKERS]
 
-# ─── FETCH DATA ───────────────────────────────────────────────────────────────
 def fetch_all_data(tickers):
-    """Batch fetch 60 days OHLCV for all tickers."""
     print(f"📥 Fetching {len(tickers)} tickers...")
     raw = yf.download(
-        tickers,
-        period="30d",
-        interval="1d",
-        auto_adjust=True,
-        progress=False,
-        threads=True,
-        multi_level_index=True,
+        tickers, period="30d", interval="1d",
+        auto_adjust=True, progress=False, threads=True, multi_level_index=True,
     )
     return raw
 
 def extract_ticker_data(raw, tickers):
-    """Extract per-ticker DataFrame from batch download result."""
     result = {}
+    if raw is None or raw.empty:
+        return result
+    is_multi = isinstance(raw.columns, pd.MultiIndex)
     for ticker in tickers:
         try:
-            # yfinance 1.x returns MultiIndex (ticker, field)
-            if isinstance(raw.columns, type(raw.columns)) and hasattr(raw.columns, "levels"):
-                # MultiIndex: swap to (field, ticker) then access ticker
-                df = raw.xs(ticker, axis=1, level=0) if ticker in raw.columns.get_level_values(0) else None
-                if df is None:
-                    df = raw.xs(ticker, axis=1, level=1) if ticker in raw.columns.get_level_values(1) else None
+            if is_multi:
+                if ticker in raw.columns.get_level_values(0):
+                    df = raw[ticker].copy()
+                else:
+                    continue
             else:
-                df = raw[ticker].copy() if ticker in raw.columns else None
-            if df is None:
-                continue
-            df = df.copy()
+                if ticker in raw.columns:
+                    df = raw[ticker].copy()
+                else:
+                    continue
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(-1)
             df = df.dropna(subset=["Close"])
-            if len(df) >= 10:
+            if len(df) >= 15:
                 result[ticker] = df
         except Exception:
             pass
     print(f"✅ {len(result)} tickers berhasil diproses")
     return result
 
-# ─── MARKET OVERVIEW ──────────────────────────────────────────────────────────
 def get_ihsg():
-    """Fetch IHSG data."""
+    for sym in ["^JKSE"]:
+        try:
+            df = yf.download(sym, period="5d", interval="1d",
+                             progress=False, auto_adjust=True, multi_level_index=False)
+            df = df.dropna()
+            if len(df) >= 2:
+                c = float(df["Close"].iloc[-1])
+                p = float(df["Close"].iloc[-2])
+                return c, (c - p) / p * 100
+        except Exception:
+            continue
+    return None, None
+
+def fetch_single(sym):
     try:
-        df = yf.download("^JKSE", period="5d", interval="1d", progress=False, auto_adjust=True)
+        df = yf.download(sym, period="5d", interval="1d",
+                         progress=False, auto_adjust=True, multi_level_index=False)
         df = df.dropna()
-        close_today = float(df["Close"].iloc[-1])
-        close_prev  = float(df["Close"].iloc[-2])
-        change_pct  = (close_today - close_prev) / close_prev * 100
-        return close_today, change_pct
-    except Exception as e:
-        return None, None
+        if len(df) >= 2:
+            c = float(df["Close"].iloc[-1])
+            p = float(df["Close"].iloc[-2])
+            return {"value": c, "pct": (c - p) / p * 100}
+    except Exception:
+        pass
+    return None
 
 def get_global_data():
-    """Fetch global indices, commodities, USD/IDR."""
     symbols = {
-        "S&P500":     "^GSPC",
-        "Nasdaq":     "^IXIC",
-        "DJIA":       "^DJI",
-        "USD/IDR":    "IDR=X",
-        "Emas":       "GC=F",
-        "Crude Oil":  "CL=F",
-        "Nikel":      "NTR.TO",  # Nickel ETF as proxy
-        "US10Y":      "^TNX",
+        "S&P500": "^GSPC", "Nasdaq": "^IXIC", "DJIA": "^DJI",
+        "USD/IDR": "IDR=X", "Emas": "GC=F", "Crude Oil": "CL=F", "US10Y": "^TNX",
     }
-    result = {}
-    for name, sym in symbols.items():
-        try:
-            df = yf.download(sym, period="5d", interval="1d", progress=False, auto_adjust=True)
-            df = df.dropna()
-            c  = float(df["Close"].iloc[-1])
-            p  = float(df["Close"].iloc[-2])
-            pct = (c - p) / p * 100
-            result[name] = {"value": c, "pct": pct}
-        except Exception:
-            result[name] = None
-    return result
+    return {name: fetch_single(sym) for name, sym in symbols.items()}
 
-# ─── MOVERS ───────────────────────────────────────────────────────────────────
 def compute_movers(ticker_data):
-    """Compute daily change % and volume for all tickers."""
     rows = []
     for ticker, df in ticker_data.items():
         if len(df) < 2:
             continue
         try:
-            close_today = float(df["Close"].iloc[-1])
-            close_prev  = float(df["Close"].iloc[-2])
-            volume      = float(df["Volume"].iloc[-1])
-            vol_avg30   = float(df["Volume"].tail(31).iloc[:-1].mean())
-            high        = float(df["High"].iloc[-1])
-            low         = float(df["Low"].iloc[-1])
-            open_       = float(df["Open"].iloc[-1])
-            close_prev2 = float(df["Close"].iloc[-2])
-
-            change_pct  = (close_today - close_prev) / close_prev * 100
-            vol_ratio   = volume / vol_avg30 if vol_avg30 > 0 else 0
-            gap_pct     = (open_ - close_prev2) / close_prev2 * 100
-
-            # High/low close ratio (0-1)
-            day_range   = high - low
-            hcr = (close_today - low) / day_range if day_range > 0 else 0.5
-
-            # 52 week high/low
-            w52_high = float(df["Close"].tail(252).max())
-            w52_low  = float(df["Close"].tail(252).min())
-            pct_from_ath = (close_today - w52_high) / w52_high * 100
-            pct_from_atl = (close_today - w52_low)  / w52_low  * 100
-
+            ct   = float(df["Close"].iloc[-1])
+            cp   = float(df["Close"].iloc[-2])
+            vol  = float(df["Volume"].iloc[-1])
+            vavg = float(df["Volume"].iloc[:-1].mean())
+            h    = float(df["High"].iloc[-1])
+            l    = float(df["Low"].iloc[-1])
+            o    = float(df["Open"].iloc[-1])
+            rng  = h - l
             rows.append({
-                "ticker":       ticker.replace(".JK", ""),
-                "close":        close_today,
-                "change_pct":   change_pct,
-                "volume":       volume,
-                "vol_ratio":    vol_ratio,
-                "gap_pct":      gap_pct,
-                "hcr":          hcr,
-                "pct_from_ath": pct_from_ath,
-                "pct_from_atl": pct_from_atl,
+                "ticker":     ticker.replace(".JK", ""),
+                "close":      ct,
+                "change_pct": (ct - cp) / cp * 100,
+                "volume":     vol,
+                "vol_ratio":  vol / vavg if vavg > 0 else 0,
+                "gap_pct":    (o - cp) / cp * 100,
+                "hcr":        (ct - l) / rng if rng > 0 else 0.5,
             })
         except Exception:
             pass
     return pd.DataFrame(rows)
 
-# ─── TECHNICAL SIGNALS ────────────────────────────────────────────────────────
 def compute_technicals(ticker_data):
-    """Compute RSI, MA, MACD, BB, ATR per ticker."""
     signals = []
     for ticker, df in ticker_data.items():
-        if len(df) < 30:
+        if len(df) < 20:
             continue
         try:
-            close = df["Close"].squeeze()
-            high  = df["High"].squeeze()
-            low   = df["Low"].squeeze()
-            vol   = df["Volume"].squeeze()
+            close = df["Close"].squeeze().astype(float)
+            high  = df["High"].squeeze().astype(float)
+            low   = df["Low"].squeeze().astype(float)
+
+            if not isinstance(close, pd.Series) or len(close) < 20:
+                continue
 
             # RSI
-            rsi_series = ta.rsi(close, length=14)
-            rsi = float(rsi_series.iloc[-1]) if rsi_series is not None else None
+            rsi_s = ta.rsi(close, length=14)
+            rsi   = float(rsi_s.iloc[-1]) if rsi_s is not None and not rsi_s.isna().all() else None
 
             # MA
-            ma20  = float(ta.sma(close, length=20).iloc[-1])
-            ma50  = float(ta.sma(close, length=50).iloc[-1]) if len(df) >= 50 else None
-            ma200 = float(ta.sma(close, length=200).iloc[-1]) if len(df) >= 200 else None
+            ma20 = float(ta.sma(close, length=20).iloc[-1])
+            ma50 = float(ta.sma(close, length=50).iloc[-1]) if len(df) >= 50 else None
 
             # MACD
-            macd_df = ta.macd(close)
-            macd_line   = float(macd_df["MACD_12_26_9"].iloc[-1])   if macd_df is not None else None
-            signal_line = float(macd_df["MACDs_12_26_9"].iloc[-1])  if macd_df is not None else None
-            macd_prev   = float(macd_df["MACD_12_26_9"].iloc[-2])   if macd_df is not None else None
-            signal_prev = float(macd_df["MACDs_12_26_9"].iloc[-2])  if macd_df is not None else None
-
-            # Bollinger Bands
-            bb = ta.bbands(close, length=20)
-            bb_upper = float(bb["BBU_20_2.0"].iloc[-1]) if bb is not None else None
-            bb_lower = float(bb["BBL_20_2.0"].iloc[-1]) if bb is not None else None
-            bb_width = float(bb["BBB_20_2.0"].iloc[-1]) if bb is not None else None
-            bb_width_prev = float(bb["BBB_20_2.0"].iloc[-6]) if bb is not None and len(bb) >= 6 else None
-
-            # ATR
-            atr = ta.atr(high, low, close, length=14)
-            atr_val = float(atr.iloc[-1]) if atr is not None else None
-
-            close_today = float(close.iloc[-1])
-            close_prev  = float(close.iloc[-2])
-
-            # Golden / Death cross
-            golden_cross = death_cross = False
-            if ma50 and ma200:
-                ma50_prev  = float(ta.sma(close, length=50).iloc[-2])
-                ma200_prev = float(ta.sma(close, length=200).iloc[-2])
-                golden_cross = ma50_prev <= ma200_prev and ma50 > ma200
-                death_cross  = ma50_prev >= ma200_prev and ma50 < ma200
-
-            # MACD crossover
+            macd_df   = ta.macd(close)
             macd_bull = macd_bear = False
-            if all(v is not None for v in [macd_line, signal_line, macd_prev, signal_prev]):
-                macd_bull = macd_prev <= signal_prev and macd_line > signal_line
-                macd_bear = macd_prev >= signal_prev and macd_line < signal_line
+            if macd_df is not None and len(macd_df) >= 2:
+                cols  = macd_df.columns.tolist()
+                mc    = [c for c in cols if c.startswith("MACD_") and "h" not in c.lower() and "s" not in c.lower()]
+                sc    = [c for c in cols if "MACDs_" in c]
+                if mc and sc:
+                    ml, sl   = float(macd_df[mc[0]].iloc[-1]), float(macd_df[sc[0]].iloc[-1])
+                    ml2, sl2 = float(macd_df[mc[0]].iloc[-2]), float(macd_df[sc[0]].iloc[-2])
+                    macd_bull = ml2 <= sl2 and ml > sl
+                    macd_bear = ml2 >= sl2 and ml < sl
 
-            # Breakout (20-day high)
-            high_20 = float(df["Close"].iloc[-21:-1].max()) if len(df) >= 21 else None
-            low_20  = float(df["Close"].iloc[-21:-1].min()) if len(df) >= 21 else None
-            breakout   = close_today > high_20 if high_20 else False
-            breakdown  = close_today < low_20  if low_20  else False
+            # BB Squeeze
+            bb         = ta.bbands(close, length=20)
+            bb_squeeze = False
+            if bb is not None and len(bb) >= 6:
+                bwc = [c for c in bb.columns if "BBB_" in c]
+                if bwc:
+                    bb_squeeze = float(bb[bwc[0]].iloc[-1]) < float(bb[bwc[0]].iloc[-6]) * 0.8
 
-            # BB Squeeze (width now < width 5 bars ago * 0.8)
-            bb_squeeze = (bb_width < bb_width_prev * 0.8) if (bb_width and bb_width_prev) else False
+            # Breakout/Breakdown
+            cn       = float(close.iloc[-1])
+            breakout = breakdown = False
+            if len(df) >= 21:
+                breakout  = cn > float(close.iloc[-21:-1].max())
+                breakdown = cn < float(close.iloc[-21:-1].min())
 
-            # Consecutive days up/down
-            consec = 0
-            direction = 1 if close.iloc[-1] > close.iloc[-2] else -1
+            # Golden/Death cross (MA20 vs MA50)
+            golden_cross = death_cross = False
+            if ma50 is not None and len(df) >= 51:
+                ma20p = float(ta.sma(close, length=20).iloc[-2])
+                ma50p = float(ta.sma(close, length=50).iloc[-2])
+                golden_cross = ma20p <= ma50p and ma20 > ma50
+                death_cross  = ma20p >= ma50p and ma20 < ma50
+
+            # Consecutive days
+            direction = 1 if float(close.iloc[-1]) > float(close.iloc[-2]) else -1
+            consec    = 0
             for i in range(len(close) - 1, 0, -1):
-                if (close.iloc[i] - close.iloc[i-1]) * direction > 0:
+                if (float(close.iloc[i]) - float(close.iloc[i-1])) * direction > 0:
                     consec += 1
                 else:
                     break
 
-            # Inside bar
-            prev_high = float(df["High"].iloc[-2])
-            prev_low  = float(df["Low"].iloc[-2])
-            curr_high = float(df["High"].iloc[-1])
-            curr_low  = float(df["Low"].iloc[-1])
-            inside_bar = curr_high < prev_high and curr_low > prev_low
-
             signals.append({
-                "ticker":        ticker.replace(".JK", ""),
-                "rsi":           rsi,
-                "ma20":          ma20,
-                "ma50":          ma50,
-                "ma200":         ma200,
-                "close":         close_today,
-                "golden_cross":  golden_cross,
-                "death_cross":   death_cross,
-                "macd_bull":     macd_bull,
-                "macd_bear":     macd_bear,
-                "breakout":      breakout,
-                "breakdown":     breakdown,
-                "bb_squeeze":    bb_squeeze,
-                "bb_upper":      bb_upper,
-                "bb_lower":      bb_lower,
-                "atr":           atr_val,
-                "consec_days":   consec * direction,
-                "inside_bar":    inside_bar,
+                "ticker": ticker.replace(".JK", ""), "rsi": rsi,
+                "ma20": ma20, "ma50": ma50, "close": cn,
+                "golden_cross": golden_cross, "death_cross": death_cross,
+                "macd_bull": macd_bull, "macd_bear": macd_bear,
+                "breakout": breakout, "breakdown": breakdown,
+                "bb_squeeze": bb_squeeze, "consec_days": consec * direction,
             })
         except Exception:
             pass
-    return pd.DataFrame(signals)
 
-# ─── WATCHLIST SCORING ────────────────────────────────────────────────────────
+    cols = ["ticker","rsi","ma20","ma50","close","golden_cross","death_cross",
+            "macd_bull","macd_bear","breakout","breakdown","bb_squeeze","consec_days"]
+    return pd.DataFrame(signals) if signals else pd.DataFrame(columns=cols)
+
 def compute_watchlist(movers_df, tech_df):
-    """Score each ticker based on bullish signals for tomorrow."""
     if movers_df.empty or tech_df.empty:
-        return pd.DataFrame(columns=["ticker", "score", "rsi", "change_pct", "vol_ratio", "breakout", "golden_cross"])
+        return pd.DataFrame()
     merged = movers_df.merge(tech_df, on="ticker", how="inner")
+    if merged.empty:
+        return pd.DataFrame()
     merged["score"] = 0
-
-    # RSI oversold → +2
-    merged.loc[merged["rsi"] < 30, "score"] += 2
-    # RSI slightly oversold → +1
+    merged.loc[merged["rsi"] < 30,                "score"] += 2
     merged.loc[(merged["rsi"] >= 30) & (merged["rsi"] < 40), "score"] += 1
-    # Volume spike → +2
-    merged.loc[merged["vol_ratio"] > 2, "score"] += 2
-    # Breakout → +2
-    merged.loc[merged["breakout"] == True, "score"] += 2
-    # Golden cross → +2
-    merged.loc[merged["golden_cross"] == True, "score"] += 2
-    # MACD bullish crossover → +1
-    merged.loc[merged["macd_bull"] == True, "score"] += 1
-    # High close ratio (buyer control) → +1
-    merged.loc[merged["hcr"] > 0.8, "score"] += 1
-    # BB squeeze → +1 (potential breakout)
-    merged.loc[merged["bb_squeeze"] == True, "score"] += 1
-    # Price above MA20 → +1
+    merged.loc[merged["vol_ratio"] > 2,           "score"] += 2
+    merged.loc[merged["breakout"] == True,         "score"] += 2
+    merged.loc[merged["golden_cross"] == True,     "score"] += 2
+    merged.loc[merged["macd_bull"] == True,        "score"] += 1
+    merged.loc[merged["hcr"] > 0.8,               "score"] += 1
+    merged.loc[merged["bb_squeeze"] == True,       "score"] += 1
     merged.loc[merged["close_x"] > merged["ma20"], "score"] += 1
-    # Not overbought
-    merged.loc[merged["rsi"] > 70, "score"] -= 2
+    merged.loc[merged["rsi"] > 70,                "score"] -= 2
+    cols = ["ticker","score","rsi","change_pct","vol_ratio","breakout","golden_cross","macd_bull"]
+    return merged.nlargest(WATCHLIST_TOP_N, "score")[cols]
 
-    top = merged.nlargest(WATCHLIST_TOP_N, "score")[
-        ["ticker", "score", "rsi", "change_pct", "vol_ratio", "breakout", "golden_cross"]
-    ]
-    return top
-
-# ─── FORMAT MESSAGE ───────────────────────────────────────────────────────────
-def fmt_pct(val, plus=True):
+def fmt_pct(val):
     if val is None: return "N/A"
-    sign = "+" if val > 0 and plus else ""
-    return f"{sign}{val:.2f}%"
+    return f"+{val:.2f}%" if val > 0 else f"{val:.2f}%"
 
-def fmt_num(val, decimals=2):
+def fmt_num(val, dec=2):
     if val is None: return "N/A"
-    return f"{val:,.{decimals}f}"
+    return f"{val:,.{dec}f}"
+
+def safe_filter(df, col, fn):
+    if df.empty or col not in df.columns: return []
+    try: return df[fn(df[col])]["ticker"].tolist()
+    except: return []
+
+def fmt_list(lst):
+    if not lst: return "–"
+    return ", ".join([f"`{t}`" for t in lst[:20]])
 
 def build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_df):
     today = datetime.now().strftime("%A, %d %B %Y")
-    lines = []
+    L = []
 
-    # Header
-    ihsg_emoji = "🟢" if ihsg_pct and ihsg_pct > 0 else "🔴"
-    lines.append(f"📊 *RINGKASAN PASAR IDX*")
-    lines.append(f"📅 {today}\n")
+    L.append("📊 *RINGKASAN PASAR IDX*")
+    L.append(f"📅 {today}")
+    L.append("")
 
-    # 1. IHSG
-    lines.append(f"*🇮🇩 IHSG*")
+    # IHSG
     if ihsg:
-        lines.append(f"{fmt_num(ihsg)} {ihsg_emoji} {fmt_pct(ihsg_pct)}\n")
+        em = "🟢" if ihsg_pct > 0 else "🔴"
+        L.append(f"*🇮🇩 IHSG:* {fmt_num(ihsg, 0)} {em} {fmt_pct(ihsg_pct)}")
     else:
-        lines.append("Data tidak tersedia\n")
+        L.append("*🇮🇩 IHSG:* Tidak tersedia")
 
-    # 2. Advance / Decline
+    # A/D
     if not movers_df.empty:
-        adv = (movers_df["change_pct"] > 0).sum()
-        dec = (movers_df["change_pct"] < 0).sum()
+        adv  = (movers_df["change_pct"] > 0).sum()
+        dec  = (movers_df["change_pct"] < 0).sum()
         flat = (movers_df["change_pct"] == 0).sum()
-        lines.append(f"*📊 Advance / Decline*")
-        lines.append(f"🟢 Naik: {adv}  🔴 Turun: {dec}  ⚪ Flat: {flat}\n")
+        L.append(f"*📊 A/D:* 🟢{adv} naik  🔴{dec} turun  ⚪{flat} flat")
+    L.append("")
 
-    # 3. Top Gainers
-    lines.append("*🚀 Top 5 Gainer*")
-    top_gain = movers_df.nlargest(5, "change_pct")
-    for _, r in top_gain.iterrows():
-        lines.append(f"  `{r['ticker']}` +{r['change_pct']:.2f}%")
-    lines.append("")
+    # Movers
+    L.append("*🚀 Top 5 Gainer*")
+    for _, r in movers_df.nlargest(5, "change_pct").iterrows():
+        L.append(f"  `{r['ticker']}` {fmt_pct(r['change_pct'])}")
+    L.append("")
 
-    # 4. Top Losers
-    lines.append("*📉 Top 5 Loser*")
-    top_lose = movers_df.nsmallest(5, "change_pct")
-    for _, r in top_lose.iterrows():
-        lines.append(f"  `{r['ticker']}` {r['change_pct']:.2f}%")
-    lines.append("")
+    L.append("*📉 Top 5 Loser*")
+    for _, r in movers_df.nsmallest(5, "change_pct").iterrows():
+        L.append(f"  `{r['ticker']}` {fmt_pct(r['change_pct'])}")
+    L.append("")
 
-    # 5. Top Volume
-    lines.append("*💹 Top 5 Volume*")
-    top_vol = movers_df.nlargest(5, "volume")
-    for _, r in top_vol.iterrows():
-        lines.append(f"  `{r['ticker']}` {r['volume']/1e6:.1f}M lot")
-    lines.append("")
+    # Volume harian
+    L.append("*💹 Top 5 Volume Harian*")
+    for _, r in movers_df.nlargest(5, "volume").iterrows():
+        L.append(f"  `{r['ticker']}` {r['volume']/1e6:.1f}M lot")
+    L.append("")
 
-    # 6. Unusual Activity
-    lines.append("*🔍 Unusual Activity*")
+    # Unusual Activity
+    L.append("*🔍 Unusual Activity*")
     unusual = movers_df[movers_df["vol_ratio"] > 2].sort_values("vol_ratio", ascending=False).head(5)
     if unusual.empty:
-        lines.append("  Tidak ada unusual volume hari ini")
+        L.append("  Tidak ada unusual volume hari ini")
     else:
         for _, r in unusual.iterrows():
-            lines.append(f"  `{r['ticker']}` vol {r['vol_ratio']:.1f}x rata-rata | harga {fmt_pct(r['change_pct'])}")
+            L.append(f"  `{r['ticker']}` {r['vol_ratio']:.1f}x rata-rata | {fmt_pct(r['change_pct'])}")
 
-    # ARA/ARB
     ara = movers_df[movers_df["change_pct"] >= 24.9]
     arb = movers_df[movers_df["change_pct"] <= -24.9]
     if not ara.empty:
-        tickers_ara = ", ".join([f"`{t}`" for t in ara["ticker"]])
-        lines.append(f"  🔺 ARA: {tickers_ara}")
+        L.append(f"  🔺 ARA: {', '.join([f'`{t}`' for t in ara['ticker']])}")
     if not arb.empty:
-        tickers_arb = ", ".join([f"`{t}`" for t in arb["ticker"]])
-        lines.append(f"  🔻 ARB: {tickers_arb}")
+        L.append(f"  🔻 ARB: {', '.join([f'`{t}`' for t in arb['ticker']])}")
 
-    # Gap
-    gap_up   = movers_df[movers_df["gap_pct"] > 2].sort_values("gap_pct", ascending=False).head(3)
-    gap_down = movers_df[movers_df["gap_pct"] < -2].sort_values("gap_pct").head(3)
-    if not gap_up.empty:
-        g = ", ".join([f"`{r['ticker']}` +{r['gap_pct']:.1f}%" for _, r in gap_up.iterrows()])
-        lines.append(f"  ⬆️ Gap Up: {g}")
-    if not gap_down.empty:
-        g = ", ".join([f"`{r['ticker']}` {r['gap_pct']:.1f}%" for _, r in gap_down.iterrows()])
-        lines.append(f"  ⬇️ Gap Down: {g}")
-    lines.append("")
+    gu = movers_df[movers_df["gap_pct"] > 2].sort_values("gap_pct", ascending=False).head(3)
+    gd = movers_df[movers_df["gap_pct"] < -2].sort_values("gap_pct").head(3)
+    if not gu.empty:
+        L.append("  ⬆️ Gap Up: " + ", ".join([f"`{r['ticker']}` +{r['gap_pct']:.1f}%" for _, r in gu.iterrows()]))
+    if not gd.empty:
+        L.append("  ⬇️ Gap Down: " + ", ".join([f"`{r['ticker']}` {r['gap_pct']:.1f}%" for _, r in gd.iterrows()]))
+    L.append("")
 
-    # 7. Sinyal Teknikal
-    lines.append("*⚡ Sinyal Teknikal*")
-
-    def safe_filter(df, col, condition_fn):
-        if col not in df.columns or df.empty:
-            return []
-        try:
-            return df[condition_fn(df[col])]["ticker"].tolist()
-        except Exception:
-            return []
-
-    oversold   = safe_filter(tech_df, "rsi", lambda x: x < 30)
-    overbought = safe_filter(tech_df, "rsi", lambda x: x > 70)
-    golden     = safe_filter(tech_df, "golden_cross", lambda x: x == True)
-    death      = safe_filter(tech_df, "death_cross", lambda x: x == True)
-    macd_b     = safe_filter(tech_df, "macd_bull", lambda x: x == True)
-    macd_br    = safe_filter(tech_df, "macd_bear", lambda x: x == True)
-    breakouts  = safe_filter(tech_df, "breakout", lambda x: x == True)
-    breakdowns = safe_filter(tech_df, "breakdown", lambda x: x == True)
-    squeezes   = safe_filter(tech_df, "bb_squeeze", lambda x: x == True)
-
-    def fmt_list(lst): return ", ".join([f"`{t}`" for t in lst]) if lst else "–"
-
-    lines.append(f"  RSI Oversold (<30): {fmt_list(oversold)}")
-    lines.append(f"  RSI Overbought (>70): {fmt_list(overbought)}")
-    lines.append(f"  Golden Cross: {fmt_list(golden)}")
-    lines.append(f"  Death Cross: {fmt_list(death)}")
-    lines.append(f"  MACD Bullish: {fmt_list(macd_b)}")
-    lines.append(f"  MACD Bearish: {fmt_list(macd_br)}")
-    lines.append(f"  Breakout 20H: {fmt_list(breakouts)}")
-    lines.append(f"  Breakdown 20L: {fmt_list(breakdowns)}")
-    lines.append(f"  BB Squeeze: {fmt_list(squeezes)}")
-
-    # Consecutive days
-    if "consec_days" in tech_df.columns and not tech_df.empty:
-        consec_up   = tech_df[tech_df["consec_days"] >= 4].sort_values("consec_days", ascending=False)
-        consec_down = tech_df[tech_df["consec_days"] <= -4].sort_values("consec_days")
+    # Sinyal Teknikal
+    L.append("*⚡ Sinyal Teknikal*")
+    if tech_df.empty:
+        L.append("  Data tidak tersedia")
     else:
-        consec_up = consec_down = tech_df.iloc[0:0]
-    if not consec_up.empty:
-        c = ", ".join([f"`{r['ticker']}` ({r['consec_days']}h)" for _, r in consec_up.iterrows()])
-        lines.append(f"  📈 Naik {consec_up['consec_days'].min()}+ hari berturut: {c}")
-    if not consec_down.empty:
-        c = ", ".join([f"`{r['ticker']}` ({abs(r['consec_days'])}h)" for _, r in consec_down.iterrows()])
-        lines.append(f"  📉 Turun {abs(consec_down['consec_days'].max())}+ hari berturut: {c}")
-    lines.append("")
+        oversold   = safe_filter(tech_df, "rsi", lambda x: x < 30)
+        overbought = safe_filter(tech_df, "rsi", lambda x: x > 70)
+        golden     = safe_filter(tech_df, "golden_cross", lambda x: x == True)
+        death      = safe_filter(tech_df, "death_cross",  lambda x: x == True)
+        macd_b     = safe_filter(tech_df, "macd_bull",    lambda x: x == True)
+        macd_br    = safe_filter(tech_df, "macd_bear",    lambda x: x == True)
+        breakouts  = safe_filter(tech_df, "breakout",     lambda x: x == True)
+        breakdowns = safe_filter(tech_df, "breakdown",    lambda x: x == True)
+        squeezes   = safe_filter(tech_df, "bb_squeeze",   lambda x: x == True)
+        L.append(f"  RSI Oversold (<30):    {fmt_list(oversold)}")
+        L.append(f"  RSI Overbought (>70):  {fmt_list(overbought)}")
+        L.append(f"  Golden Cross:          {fmt_list(golden)}")
+        L.append(f"  Death Cross:           {fmt_list(death)}")
+        L.append(f"  MACD Bullish:          {fmt_list(macd_b)}")
+        L.append(f"  MACD Bearish:          {fmt_list(macd_br)}")
+        L.append(f"  Breakout 20H:          {fmt_list(breakouts)}")
+        L.append(f"  Breakdown 20L:         {fmt_list(breakdowns)}")
+        L.append(f"  BB Squeeze:            {fmt_list(squeezes)}")
+        if "consec_days" in tech_df.columns:
+            cup   = tech_df[tech_df["consec_days"] >= 4].sort_values("consec_days", ascending=False)
+            cdown = tech_df[tech_df["consec_days"] <= -4].sort_values("consec_days")
+            if not cup.empty:
+                L.append("  📈 Naik berturut: " + ", ".join([f"`{r['ticker']}` ({r['consec_days']}h)" for _, r in cup.iterrows()]))
+            if not cdown.empty:
+                L.append("  📉 Turun berturut: " + ", ".join([f"`{r['ticker']}` ({abs(r['consec_days'])}h)" for _, r in cdown.iterrows()]))
+    L.append("")
 
-    # 8. 52-Week Proximity
-    near_ath = movers_df[movers_df["pct_from_ath"] >= -2]
-    near_atl = movers_df[movers_df["pct_from_atl"] <= 2]
-    if not near_ath.empty or not near_atl.empty:
-        lines.append("*🏆 52-Week Proximity*")
-        if not near_ath.empty:
-            t = ", ".join([f"`{r['ticker']}`" for _, r in near_ath.iterrows()])
-            lines.append(f"  🔝 Dekat ATH: {t}")
-        if not near_atl.empty:
-            t = ", ".join([f"`{r['ticker']}`" for _, r in near_atl.iterrows()])
-            lines.append(f"  🔻 Dekat ATL: {t}")
-        lines.append("")
-
-    # 9. Global
-    lines.append("*🌍 Global & Komoditas*")
+    # Global
+    L.append("*🌍 Global & Komoditas*")
     def gfmt(name, data):
-        if data is None: return f"  {name}: N/A"
-        emoji = "🟢" if data["pct"] > 0 else "🔴"
-        return f"  {name}: {fmt_num(data['value'])} {emoji} {fmt_pct(data['pct'])}"
+        if not data: return f"  {name}: N/A"
+        em = "🟢" if data["pct"] > 0 else "🔴"
+        return f"  {name}: {fmt_num(data['value'])} {em} {fmt_pct(data['pct'])}"
+    for name in ["S&P500","Nasdaq","DJIA","USD/IDR","Emas","Crude Oil","US10Y"]:
+        L.append(gfmt(name, global_data.get(name)))
+    L.append("")
 
-    lines.append(gfmt("S&P500",    global_data.get("S&P500")))
-    lines.append(gfmt("Nasdaq",    global_data.get("Nasdaq")))
-    lines.append(gfmt("DJIA",      global_data.get("DJIA")))
-    lines.append(gfmt("USD/IDR",   global_data.get("USD/IDR")))
-    lines.append(gfmt("Emas",      global_data.get("Emas")))
-    lines.append(gfmt("Crude Oil", global_data.get("Crude Oil")))
-    lines.append(gfmt("Nikel",     global_data.get("Nikel")))
-    lines.append(gfmt("US10Y",     global_data.get("US10Y")))
-    lines.append("")
+    # Watchlist
+    L.append(f"*🎯 Watchlist Besok (Top {WATCHLIST_TOP_N})*")
+    L.append("_Scoring teknikal — bukan rekomendasi finansial_")
+    if watchlist_df.empty:
+        L.append("  Data tidak tersedia")
+    else:
+        for i, (_, r) in enumerate(watchlist_df.iterrows(), 1):
+            tags = []
+            rv = r.get("rsi")
+            if rv is not None and not pd.isna(rv) and rv < 30: tags.append("RSI OS")
+            if r.get("breakout"):     tags.append("Breakout")
+            if r.get("golden_cross"): tags.append("Golden X")
+            if r.get("macd_bull"):    tags.append("MACD Bull")
+            vr = r.get("vol_ratio")
+            if vr and vr > 2:         tags.append(f"Vol {vr:.1f}x")
+            L.append(f"  {i}. `{r['ticker']}` — Skor {int(r['score'])} — {' | '.join(tags) if tags else 'Multi-signal'}")
+    L.append("")
+    L.append("_Data: yfinance | Jam 17.00 WIB_")
+    L.append("⚠️ _Bukan rekomendasi investasi. DYOR._")
 
-    # 10. Watchlist
-    lines.append(f"*🎯 Watchlist Besok (Top {WATCHLIST_TOP_N})*")
-    lines.append("_Berdasarkan scoring sinyal teknikal — bukan rekomendasi finansial_")
-    for i, (_, r) in enumerate(watchlist_df.iterrows(), 1):
-        tags = []
-        if r.get("rsi") and r["rsi"] < 30: tags.append("RSI OS")
-        if r.get("breakout"):               tags.append("Breakout")
-        if r.get("golden_cross"):           tags.append("Golden X")
-        if r.get("vol_ratio") and r["vol_ratio"] > 2: tags.append(f"Vol {r['vol_ratio']:.1f}x")
-        tag_str = " | ".join(tags) if tags else "Multi-signal"
-        lines.append(f"  {i}. `{r['ticker']}` — Skor {int(r['score'])} — {tag_str}")
-    lines.append("")
+    return "\n".join(L)
 
-    lines.append("_Data: yfinance | Dikirim otomatis jam 17.00 WIB_")
-    lines.append("⚠️ _Bukan rekomendasi investasi. DYOR._")
-
-    return "\n".join(lines)
-
-# ─── SEND TELEGRAM ────────────────────────────────────────────────────────────
 def send_telegram(message, token, chat_id):
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    # Split if too long (Telegram limit 4096 chars)
-    max_len = 4000
-    chunks = [message[i:i+max_len] for i in range(0, len(message), max_len)]
+    url    = f"https://api.telegram.org/bot{token}/sendMessage"
+    chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
     for i, chunk in enumerate(chunks):
-        payload = {
-            "chat_id":    chat_id,
-            "text":       chunk,
-            "parse_mode": "Markdown",
-        }
-        resp = requests.post(url, json=payload)
+        resp = requests.post(url, json={"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"})
         if not resp.ok:
             print(f"❌ Telegram error: {resp.text}")
         else:
             print(f"✅ Pesan {i+1}/{len(chunks)} terkirim")
         time.sleep(0.5)
 
-# ─── MAIN ─────────────────────────────────────────────────────────────────────
 def run():
     print(f"\n{'='*50}")
     print(f"🚀 IDX Daily Report — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"{'='*50}\n")
 
-    tickers = get_tickers()
-
-    # Fetch
-    raw = fetch_all_data(tickers)
+    tickers     = get_tickers()
+    raw         = fetch_all_data(tickers)
     ticker_data = extract_ticker_data(raw, tickers)
 
-    # Compute
     print("⚙️  Menghitung movers...")
     movers_df = compute_movers(ticker_data)
 
     print("⚙️  Menghitung sinyal teknikal...")
     tech_df = compute_technicals(ticker_data)
+    print(f"   → {len(tech_df)} ticker berhasil dihitung sinyalnya")
 
     print("⚙️  Membuat watchlist...")
     watchlist_df = compute_watchlist(movers_df, tech_df)
 
     print("🌍 Fetch data global...")
     ihsg, ihsg_pct = get_ihsg()
-    global_data = get_global_data()
+    global_data    = get_global_data()
 
-    # Build message
     print("📝 Menyusun pesan...")
     message = build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_df)
 
-    # Print to console (for testing)
     print("\n" + "="*50)
     print("PREVIEW PESAN:")
     print("="*50)
     print(message)
 
-    # Send to Telegram
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         send_telegram(message, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
     else:
-        print("⚠️  TELEGRAM_TOKEN atau TELEGRAM_CHAT_ID belum diset di .env")
+        print("⚠️  TELEGRAM_TOKEN atau TELEGRAM_CHAT_ID belum diset")
 
 if __name__ == "__main__":
     run()
