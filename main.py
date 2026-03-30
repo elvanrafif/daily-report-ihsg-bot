@@ -23,9 +23,9 @@ def get_tickers():
     return [f"{t}.JK" for t in IDX_TICKERS]
 
 def fetch_all_data(tickers):
-    print(f"📥 Fetching {len(tickers)} tickers (60d)...")
+    print(f"📥 Fetching {len(tickers)} tickers (1y)...")
     raw = yf.download(
-        tickers, period="60d", interval="1d",
+        tickers, period="1y", interval="1d",
         auto_adjust=True, progress=False, threads=True, multi_level_index=True,
     )
     return raw
@@ -62,10 +62,10 @@ def get_ihsg():
         df = df.dropna()
         if len(df) >= 2:
             c, p = float(df["Close"].iloc[-1]), float(df["Close"].iloc[-2])
-            return c, (c - p) / p * 100
+            return c, p, (c - p) / p * 100
     except Exception:
         pass
-    return None, None
+    return None, None, None
 
 def fetch_single(sym):
     try:
@@ -118,6 +118,8 @@ def compute_movers(ticker_data):
                 "gap_pct":    (o - cp) / cp * 100,
                 "hcr":        (ct - l) / rng if rng > 0 else 0.5,
                 "perf_1m":    perf_1m,
+                "perf_3m":    perf_3m,
+                "perf_6m":    perf_6m,
                 "adr":        adr,
             })
         except Exception:
@@ -211,17 +213,22 @@ def compute_watchlist(movers_df, tech_df):
     tiers = {"A+": [], "A": [], "B": []}
     for _, r in merged.iterrows():
         perf_1m  = r.get("perf_1m")
+        perf_3m  = r.get("perf_3m")
+        perf_6m  = r.get("perf_6m")
         adr      = r.get("adr") or 0
         nilai    = r.get("nilai") or 0
         sma_full = r.get("sma_full", False)
         sma_rel  = r.get("sma_relaxed", False)
         ticker   = r["ticker"]
-        if perf_1m is None: continue
-        if perf_1m > 30 and nilai > 1e9 and adr > 4.0 and sma_full:
+        if any(v is None for v in [perf_1m, perf_3m, perf_6m]): continue
+        # Tier A+: super momentum (sama persis dengan screener)
+        if perf_1m > 30 and perf_3m > 50 and perf_6m > 100 and nilai > 1e9 and adr > 4.0 and sma_full:
             tiers["A+"].append(ticker)
-        elif perf_1m > 15 and nilai > 500e6 and adr > 3.0 and sma_full:
+        # Tier A: momentum kuat
+        elif perf_1m > 15 and perf_3m > 25 and perf_6m > 40 and nilai > 500e6 and adr > 3.0 and sma_full:
             tiers["A"].append(ticker)
-        elif perf_1m > 5 and nilai > 250e6 and adr > 2.5 and sma_rel:
+        # Tier B: early detection
+        elif perf_1m > 5 and perf_3m > 10 and perf_6m > 15 and nilai > 250e6 and adr > 2.5 and sma_rel:
             tiers["B"].append(ticker)
     for t in tiers:
         tiers[t].sort()
@@ -255,7 +262,7 @@ def ticker_rows(lst, per_row=5):
         rows.append(" ".join([f"<code>{t}</code>" for t in chunk]))
     return rows
 
-def build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_tiers):
+def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, watchlist_tiers):
     today = datetime.now().strftime("%A, %d %B %Y")
     L = []
 
@@ -263,9 +270,9 @@ def build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_tie
     L.append(f"📅 {today}")
     L.append("")
 
-    if ihsg:
+    if ihsg and ihsg_prev:
         em = "🟢" if ihsg_pct > 0 else "🔴"
-        L.append(f"<b>🇮🇩 IHSG:</b> {fmt_num(ihsg, 0)} {em} {fmt_pct(ihsg_pct)}")
+        L.append(f"<b>🇮🇩 IHSG:</b> {fmt_num(ihsg_prev, 0)} → {fmt_num(ihsg, 0)} {em} {fmt_pct(ihsg_pct)}")
     else:
         L.append("<b>🇮🇩 IHSG:</b> Tidak tersedia")
 
@@ -456,11 +463,11 @@ def run():
         print(f"   {tier}: {len(lst)} saham")
 
     print("🌍 Fetch data global...")
-    ihsg, ihsg_pct = get_ihsg()
+    ihsg, ihsg_prev, ihsg_pct = get_ihsg()
     global_data    = get_global_data()
 
     print("📝 Menyusun pesan...")
-    message = build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_tiers)
+    message = build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, watchlist_tiers)
 
     print("\n" + "="*50)
     print("PREVIEW PESAN:")
