@@ -32,12 +32,16 @@ def extract_ticker_data(raw, tickers):
     result = {}
     if raw is None or raw.empty:
         return result
+
     is_multi = isinstance(raw.columns, pd.MultiIndex)
+
     for ticker in tickers:
         try:
             if is_multi:
-                if ticker in raw.columns.get_level_values(0):
-                    df = raw[ticker].copy()
+                # yfinance 1.x: MultiIndex is (field, ticker) — level 0 = field, level 1 = ticker
+                if ticker in raw.columns.get_level_values(1):
+                    # xs across level 1 (ticker), returns df with field as columns
+                    df = raw.xs(ticker, axis=1, level=1).copy()
                 else:
                     continue
             else:
@@ -45,13 +49,16 @@ def extract_ticker_data(raw, tickers):
                     df = raw[ticker].copy()
                 else:
                     continue
+
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(-1)
+
             df = df.dropna(subset=["Close"])
             if len(df) >= 15:
                 result[ticker] = df
         except Exception:
             pass
+
     print(f"✅ {len(result)} tickers berhasil diproses")
     return result
 
@@ -259,19 +266,28 @@ def build_message(ihsg, ihsg_pct, movers_df, tech_df, global_data, watchlist_df)
 
     # Movers
     L.append("*🚀 Top 5 Gainer*")
-    for _, r in movers_df.nlargest(5, "change_pct").iterrows():
-        L.append(f"  `{r['ticker']}` {fmt_pct(r['change_pct'])}")
+    if not movers_df.empty and "change_pct" in movers_df.columns:
+        for _, r in movers_df.nlargest(5, "change_pct").iterrows():
+            L.append(f"  `{r['ticker']}` {fmt_pct(r['change_pct'])}")
+    else:
+        L.append("  Data tidak tersedia")
     L.append("")
 
     L.append("*📉 Top 5 Loser*")
-    for _, r in movers_df.nsmallest(5, "change_pct").iterrows():
-        L.append(f"  `{r['ticker']}` {fmt_pct(r['change_pct'])}")
+    if not movers_df.empty and "change_pct" in movers_df.columns:
+        for _, r in movers_df.nsmallest(5, "change_pct").iterrows():
+            L.append(f"  `{r['ticker']}` {fmt_pct(r['change_pct'])}")
+    else:
+        L.append("  Data tidak tersedia")
     L.append("")
 
     # Volume harian
     L.append("*💹 Top 5 Volume Harian*")
-    for _, r in movers_df.nlargest(5, "volume").iterrows():
-        L.append(f"  `{r['ticker']}` {r['volume']/1e6:.1f}M lot")
+    if not movers_df.empty and "volume" in movers_df.columns:
+        for _, r in movers_df.nlargest(5, "volume").iterrows():
+            L.append(f"  `{r['ticker']}` {r['volume']/1e6:.1f}M lot")
+    else:
+        L.append("  Data tidak tersedia")
     L.append("")
 
     # Unusual Activity
