@@ -391,7 +391,7 @@ def build_message(ihsg, ihsg_prev, ihsg_pct, movers_df, tech_df, global_data, wa
 
     return "\n".join(L)
 
-def send_telegram(message, token, chat_id):
+def send_telegram(message, token, chat_id, thread_id=None):
     """Split by SEP sections to avoid cutting HTML tags mid-chunk."""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     SEP_LINE = "──────────────"
@@ -413,13 +413,19 @@ def send_telegram(message, token, chat_id):
         chunks.append(current.strip())
 
     for i, chunk in enumerate(chunks):
-        resp = requests.post(url, json={
-            "chat_id": chat_id, "text": chunk, "parse_mode": "HTML"
-        })
+        payload = {
+            "chat_id": chat_id, 
+            "text": chunk, 
+            "parse_mode": "HTML"
+        }
+        if thread_id:
+            payload["message_thread_id"] = thread_id
+
+        resp = requests.post(url, json=payload)
         if not resp.ok:
             print(f"❌ Telegram error: {resp.text}")
         else:
-            print(f"✅ Pesan {i+1}/{len(chunks)} terkirim")
+            print(f"✅ Pesan {i+1}/{len(chunks)} terkirim ke {chat_id}{' (Topic '+thread_id+')' if thread_id else ''}")
         time.sleep(1)
 
 def run():
@@ -456,7 +462,16 @@ def run():
     print(message)
 
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        send_telegram(message, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
+        # Support multiple chat IDs and Topic IDs (format: chatid_threadid)
+        entries = [e.strip() for e in TELEGRAM_CHAT_ID.split(",") if e.strip()]
+        for entry in entries:
+            if "_" in entry:
+                cid, tid = entry.split("_", 1)
+                print(f"📤 Mengirim ke chat_id: {cid} (Topic ID: {tid})")
+                send_telegram(message, TELEGRAM_TOKEN, cid, tid)
+            else:
+                print(f"📤 Mengirim ke chat_id: {entry}")
+                send_telegram(message, TELEGRAM_TOKEN, entry)
     else:
         print("⚠️  TELEGRAM_TOKEN atau TELEGRAM_CHAT_ID belum diset")
 

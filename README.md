@@ -27,6 +27,7 @@ python scheduler.py   # jalankan scheduler
 2. Ketik `/newbot` → ikuti instruksi → dapat TOKEN
 3. Tambahkan bot ke grup kamu sebagai admin
 4. Dapatkan CHAT_ID grup: forward pesan dari grup ke [@userinfobot](https://t.me/userinfobot)
+   - *Tips: Untuk kirim ke >1 grup, pisahkan ID dengan koma (contoh: `-1234567,-8901234`)*
 5. Isi `.env` dengan TOKEN dan CHAT_ID
 
 ## Deploy ke Coolify
